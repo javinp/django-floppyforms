@@ -1,11 +1,15 @@
 import datetime
 import os
 
-from django import VERSION
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.db import models
 from django.test import TestCase
 from django.utils.dates import MONTHS
 
+try:
+    from django.utils.timezone import now
+except ImportError:
+    now = datetime.datetime.now
 
 import floppyforms as forms
 from floppyforms.tests.gis import GisTests
@@ -364,6 +368,30 @@ class WidgetRenderingTest(TestCase):
         self.assertFalse('"12" selected' in rendered, rendered)
         self.assertTrue('"123" selected' in rendered, rendered)
 
+    def test_optgroup(self):
+        """<optgroup> in select widgets"""
+        CHOICES = (
+            (None, (
+                ('en', 'English'),
+                ('de', 'Deutsch'),
+                ('fr', 'Francais'),
+            )),
+            ("Asian", (
+                ('jp', 'Japanese'),
+                ('bn', 'Bengali'),
+            )),
+        )
+
+        class LangForm(forms.Form):
+            lang = forms.ChoiceField(choices=CHOICES)
+
+        rendered = LangForm().as_p()
+        self.assertTrue('<optgroup label="Asian">' in rendered, rendered)
+
+        rendered = LangForm(data={'lang': 'jp'}).as_p()
+        expected = '<option value="jp" selected="selected">Japanese</option>'
+        self.assertTrue(expected in rendered, rendered)
+
     def test_cb_multiple(self):
         """CheckboxSelectMultiple"""
         CHOICES = (
@@ -542,8 +570,6 @@ class WidgetRenderingTest(TestCase):
 
         rendered = ComboForm().as_p()
         self.assertTrue(' required ' in rendered, rendered)
-        form = ComboForm(data={'combo': 'bob@example.com'})
-        f = ComboForm(data={'combo': 'bob@example.com'})
         self.assertFalse(ComboForm(data={'combo': 'bob@exmpl.com'}).is_valid())
         self.assertTrue(ComboForm(data={'combo': 'bob@ex.com'}).is_valid())
 
@@ -599,7 +625,7 @@ class WidgetRenderingTest(TestCase):
     def test_datetime_with_initial(self):
         """SplitDateTimeWidget with an initial value"""
         class DateTimeForm(forms.Form):
-            dt = forms.DateTimeField(initial=datetime.datetime.now(),
+            dt = forms.DateTimeField(initial=now(),
                                      widget=forms.SplitDateTimeWidget)
 
         rendered = DateTimeForm().as_p()
@@ -634,10 +660,10 @@ class WidgetRenderingTest(TestCase):
         self.assertTrue(' id="id_dt_day"' in rendered, rendered)
 
         class SelectDateForm(forms.Form):
-            dt = forms.DateField(initial='2011-09-09',
+            dt = forms.DateField(initial='%s-09-09' % today.year,
                                  widget=forms.SelectDateWidget)
         rendered = SelectDateForm().as_p()
-        self.assertTrue('2011' in rendered, rendered)
+        self.assertTrue(str(today.year) in rendered, rendered)
 
     def test_no_attrs_rendering(self):
         widget = forms.TextInput()
@@ -669,9 +695,6 @@ class WidgetRenderingTest(TestCase):
         self.assertFalse('required' in rendered, rendered)
 
     def test_clearable_file_input(self):
-        if VERSION < (1, 3):
-            return  # ClearableFileInput not present
-
         class Form(forms.Form):
             file_ = forms.FileField(required=False)
 
@@ -684,3 +707,43 @@ class WidgetRenderingTest(TestCase):
         self.assertTrue(form.is_valid())
         # file_ has been cleared
         self.assertFalse(form.cleaned_data['file_'])
+
+    def test_rendered_file_input(self):
+        class Form(forms.Form):
+            file_ = forms.FileField()
+
+            def clean_file_(self):
+                raise forms.ValidationError('Some error')
+
+        file_ = SimpleUploadedFile('name', 'some contents')
+
+        form = Form(files={'file_': file_})
+        valid = form.is_valid()
+        self.assertFalse(valid)
+        rendered = form.as_p()
+        self.assertTrue('Some error' in rendered, rendered)
+        self.assertTrue(' required' in rendered, rendered)
+
+    def test_true_attr(self):
+        """widgets with attrs={'foo': True} should render as <input foo>"""
+        class Form(forms.Form):
+            text = forms.CharField(widget=forms.TextInput(attrs={
+                'foo': True,
+                'bar': False,
+            }))
+
+        rendered = Form().as_p()
+        self.assertFalse('True' in rendered, rendered)
+        self.assertTrue('False' in rendered, rendered)
+
+    def test_range_input(self):
+        class Form(forms.Form):
+            foo = forms.CharField(widget=forms.RangeInput(attrs={
+                'min': 1, 'max': 10L, 'step': 1, 'bar': 1.0
+            }))
+
+        rendered = Form(initial={'foo': 5}).as_p()
+        self.assertTrue('step="1"' in rendered)
+        self.assertTrue('min="1"' in rendered)
+        self.assertTrue('max="10"' in rendered)
+        self.assertTrue('bar="1.0"' in rendered)
